@@ -5,7 +5,7 @@ const axios = require('axios');
 
 const app = express();
 app.use(bodyParser.json());
-app.use(express.static('public')); // Carpeta donde estarán tus archivos HTML/CSS/JS
+app.use(express.static('public'));
 
 // Estados del bot
 const STATE = {
@@ -19,7 +19,7 @@ const STATE = {
   CONTACT: 'contact'
 };
 
-// Mapeos de respuestas
+// Opciones válidas
 const PROPERTY_TYPES_MAP = {
   '1': 'casa',
   '2': 'departamento',
@@ -78,47 +78,12 @@ async function sendTextMessage(to, text) {
 
   // Registrar mensaje del bot
   if (!conversations[to]) conversations[to] = { responses: [] };
-  conversations[from].responses.push({
-  from: 'bot',
-  text: text,
-  timestamp: new Date()
-});
+  conversations[to].responses.push({
+    from: 'bot',
+    text: text,
+    timestamp: new Date() // ✅ Corregido
+  });
 }
-
-// Ruta para enviar mensajes desde el asesor
-app.post('/send', async (req, res) => {
-  const { to, message } = req.body;
-
-  if (!to || !message) return res.status(400).send("Faltan datos");
-
-  try {
-    await axios.post(
-      `https://graph.facebook.com/v22.0/${process.env.PHONE_NUMBER_ID}/messages`, 
-      {
-        messaging_product: "whatsapp",
-        to,
-        text: { body: message }
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`
-        }
-      }
-    );
-
-    // Guardar la respuesta del asesor
-    conversations[to].responses.push({
-  from: 'bot',
-  text: message,
-  timestamp: new Date()
-});
-
-    res.send({ status: "ok" });
-  } catch (err) {
-    console.error("🚨 Error al enviar mensaje:", err.message);
-    res.send({ status: "error", error: err.message });
-  }
-});
 
 // Webhook de verificación
 app.get('/webhook', (req, res) => {
@@ -173,7 +138,7 @@ app.post('/webhook', async (req, res) => {
     conversations[from].responses.push({
       from: 'cliente',
       text: text,
-      timestamp: new Date()
+      timestamp: new Date() // ✅ Corregido
     });
   }
 
@@ -299,22 +264,12 @@ app.post('/webhook', async (req, res) => {
         if (contactMatch === 'sí, por favor') {
           await sendTextMessage(
             from,
-            "✅ Perfecto, un asesor se pondrá en contacto contigo ahora mismo."
+            "✅ Un asesor se pondrá en contacto contigo ahora mismo."
           );
 
-          // Cambiar estado para que el bot deje de responder automáticamente
+          // Cambiar estado para detener flujo automático
           user.state = 'manual';
-
-          // Notificar al asesor
-          console.log(`📢 Cliente ${from} requiere asesor`);
-
-          // Opcional: enviar notificación al asesor
-          if (conversations[from]) {
-            conversations[from].requiresAdvisor = true;
-          }
-
         } else {
-          // Si dice "no, gracias", termina el flujo
           await sendTextMessage(
             from,
             "✅ ¡Gracias por su solicitud!\n\nNos pondremos en contacto en el menor tiempo posible."
@@ -344,9 +299,9 @@ app.get('/monitor', (req, res) => {
           body { font-family: Arial; background: #000; color: white; padding: 20px; }
           .chat-container { display: flex; flex-direction: column; max-width: 600px; margin-bottom: 30px; }
           .chat-header { font-weight: bold; margin-top: 20px; }
-          .bubble-client { background: #373A3C; color: white; border-radius: 10px; padding: 10px; width: auto; max-width: 80%; margin: 5px 0; float: left; clear: both; }
+          .bubble-client { background: #373A3C; color: white; border-radius: 10px; padding: 10px; max-width: 80%; margin: 5px 0; float: left; clear: both; }
           .bubble-bot { background: #25D366; color: white; border-radius: 10px; padding: 10px; max-width: 80%; margin: 5px 0; float: right; clear: both; }
-          .timestamp { font-size: 0.7em; color: gray; margin-left: 10px; }
+          .timestamp { font-size: 0.7em; color: gray; }
           .input-area { margin-top: 10px; display: flex; gap: 10px; }
           input[type=text], textarea { padding: 10px; width: 100%; max-width: 400px; }
           button { padding: 10px 15px; background: #25D366; color: white; border: none; border-radius: 5px; cursor: pointer; }
@@ -361,7 +316,7 @@ app.get('/monitor', (req, res) => {
 
     html += `
       <div class="chat-container">
-        <div class="chat-header">Cliente: ${from}</div>
+        <strong>${from}</strong><br>
     `;
 
     chat.responses.forEach(msg => {
@@ -371,22 +326,21 @@ app.get('/monitor', (req, res) => {
         html += `
           <div style="clear:both;">
             <div class="bubble-client">${msg.text}</div>
-            <small class="timestamp">${time}</small>
+            <small class="timestamp">${time}</small><br>
           </div>
         `;
       } else {
         html += `
           <div style="clear:both;">
             <div class="bubble-bot">${msg.text}</div>
-            <small class="timestamp">${time}</small>
+            <small class="timestamp">${time}</small><br>
           </div>
         `;
       }
     });
 
-    // Campo para responder manualmente
     html += `
-        <form class="input-area" action="/api/send" method="POST">
+        <form class="input-area" action="/send" method="POST">
           <input type="hidden" name="to" value="${from}">
           <input type="text" name="message" placeholder="Escribe tu mensaje...">
           <button type="submit">Enviar</button>
@@ -399,14 +353,11 @@ app.get('/monitor', (req, res) => {
   res.send(html);
 });
 
-// Carpeta pública para archivos estáticos
-app.use(express.static('public'));
-
 // Ruta para enviar mensajes manuales
-app.post('/api/send', async (req, res) => {
+app.post('/send', async (req, res) => {
   const { to, message } = req.body;
 
-  if (!to || !message) return res.send("Faltan datos");
+  if (!to || !message) return res.status(400).send("Faltan datos");
 
   try {
     await axios.post(
@@ -418,8 +369,8 @@ app.post('/api/send', async (req, res) => {
       },
       {
         headers: {
-          Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
-        },
+          Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`
+        }
       }
     );
 
@@ -428,10 +379,11 @@ app.post('/api/send', async (req, res) => {
     conversations[to].responses.push({
       from: 'bot',
       text: message,
-      timestamp: new.Date()
+      timestamp: new Date() // ✅ Corregido
     });
 
     res.redirect('/monitor');
+
   } catch (err) {
     console.error("🚨 Error al enviar mensaje:", err.message);
     res.send("Hubo un error");
