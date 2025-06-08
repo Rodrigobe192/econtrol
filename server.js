@@ -58,6 +58,9 @@ const CONTACT_OPTIONS_MAP = {
 // Almacenamiento temporal de datos
 let userData = {};
 
+// Historial de conversaciones
+let conversations = {};
+
 // Función para enviar mensaje de texto
 async function sendTextMessage(to, text) {
   await axios.post(
@@ -73,6 +76,17 @@ async function sendTextMessage(to, text) {
       },
     }
   );
+
+  // Guarda la respuesta del bot en el historial
+  if (!conversations[to]) {
+    conversations[to] = { responses: [] };
+  }
+
+  conversations[to].responses.push({
+    from: 'bot',
+    text: text,
+    timestamp: new Date()
+  });
 }
 
 // Webhook de verificación
@@ -92,7 +106,6 @@ app.get('/webhook', (req, res) => {
 app.post('/webhook', async (req, res) => {
   const body = req.body;
 
-  // Validar que sea un evento válido
   if (
     !body.object ||
     !body.entry ||
@@ -118,6 +131,20 @@ app.post('/webhook', async (req, res) => {
   }
 
   const user = userData[from];
+
+  // Inicializar historial de conversación
+  if (!conversations[from]) {
+    conversations[from] = { responses: [] };
+  }
+
+  // Registrar mensaje del cliente
+  if (text && text !== '') {
+    conversations[from].responses.push({
+      from: 'cliente',
+      text: text,
+      timestamp: new Date()
+    });
+  }
 
   try {
     switch (user.state) {
@@ -277,6 +304,47 @@ app.post('/webhook', async (req, res) => {
   res.sendStatus(200);
 });
 
-app.listen(3000, () => {
-  console.log('🚀 Servidor corriendo en puerto 3000');
+// Ruta /monitor - Muestra el historial de conversaciones
+app.get('/monitor', (req, res) => {
+  let html = `
+    <html>
+      <head>
+        <title>📲 Monitor de Chatbot</title>
+        <meta http-equiv="refresh" content="10">
+        <style>
+          body { font-family: Arial; background: #f9f9f9; padding: 20px; }
+          .chat { background: white; border-radius: 8px; padding: 15px; margin-bottom: 20px; box-shadow: 0 1px 4px rgba(0,0,0,0.1); }
+          .from, .to { display: block; margin: 5px 0; }
+          .cliente { color: black; font-weight: bold; }
+          .bot { color: green; font-weight: bold; }
+          small { color: gray; font-size: 0.8em; }
+          h2 { color: #25D366; }
+        </style>
+      </head>
+      <body>
+        <h2>Monitor de Conversaciones</h2>
+  `;
+
+  for (const from in conversations) {
+    html += `<div class="chat"><strong>Cliente:</strong> ${from}<br>`;
+    conversations[from].responses.forEach(msg => {
+      const time = msg.timestamp.toLocaleTimeString();
+
+      if (msg.from === 'cliente') {
+        html += `<span class="cliente">👤 Cliente:</span> <small>${time}</small><br>${msg.text}<br><br>`;
+      } else {
+        html += `<span class="bot">🤖 Bot:</span> <small>${time}</small><br>${msg.text}<br><br>`;
+      }
+    });
+    html += `<hr></div>`;
+  }
+
+  html += '</body></html>';
+  res.send(html);
+});
+
+// Puerto dinámico para Render
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`🚀 Servidor corriendo en puerto ${PORT}`);
 });
