@@ -5,6 +5,7 @@ const axios = require('axios');
 
 const app = express();
 app.use(bodyParser.json());
+app.use(express.static('public')); // Carpeta donde estarán tus archivos HTML/CSS/JS
 
 // Estados del bot
 const STATE = {
@@ -18,7 +19,7 @@ const STATE = {
   CONTACT: 'contact'
 };
 
-// Opciones válidas
+// Mapeos de respuestas
 const PROPERTY_TYPES_MAP = {
   '1': 'casa',
   '2': 'departamento',
@@ -57,8 +58,6 @@ const CONTACT_OPTIONS_MAP = {
 
 // Almacenamiento temporal de datos
 let userData = {};
-
-// Historial de conversaciones
 let conversations = {};
 
 // Función para enviar mensaje de texto
@@ -77,17 +76,49 @@ async function sendTextMessage(to, text) {
     }
   );
 
-  // Guarda la respuesta del bot en el historial
-  if (!conversations[to]) {
-    conversations[to] = { responses: [] };
-  }
-
+  // Registrar mensaje del bot
+  if (!conversations[to]) conversations[to] = { responses: [] };
   conversations[to].responses.push({
     from: 'bot',
     text: text,
     timestamp: new Date()
   });
 }
+
+// Ruta para enviar mensajes desde el asesor
+app.post('/send', async (req, res) => {
+  const { to, message } = req.body;
+
+  if (!to || !message) return res.status(400).send("Faltan datos");
+
+  try {
+    await axios.post(
+      `https://graph.facebook.com/v22.0/${process.env.PHONE_NUMBER_ID}/messages`, 
+      {
+        messaging_product: "whatsapp",
+        to,
+        text: { body: message }
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`
+        }
+      }
+    );
+
+    // Guardar la respuesta del asesor
+    conversations[to].responses.push({
+      from: 'bot',
+      text: message,
+      timestamp: new Date()
+    });
+
+    res.send({ status: "ok" });
+  } catch (err) {
+    console.error("🚨 Error al enviar mensaje:", err.message);
+    res.send({ status: "error", error: err.message });
+  }
+});
 
 // Webhook de verificación
 app.get('/webhook', (req, res) => {
@@ -264,34 +295,32 @@ app.post('/webhook', async (req, res) => {
 
         user.contact = contactMatch;
 
-        // Enviar datos a Google Sheets vía Apps Script
-        try {
-          await axios.post(process.env.APPS_SCRIPT_URL, {
+        // Si dice "sí, por favor", pasamos al modo manual
+        if (contactMatch === 'sí, por favor') {
+          await sendTextMessage(
             from,
-            name: user.name,
-            district: user.district,
-            propertyType: user.propertyType,
-            area: user.area,
-            service: user.service,
-            serviceType: user.serviceType,
-            contact: user.contact
-          });
+            "✅ Perfecto, un asesor se pondrá en contacto contigo ahora mismo."
+          );
 
-          console.log("✅ Datos guardados en Google Sheets");
+          // Cambiar estado para que el bot deje de responder automáticamente
+          user.state = 'manual';
 
+          // Notificar al asesor
+          console.log(`📢 Cliente ${from} requiere asesor`);
+
+          // Opcional: enviar notificación al asesor
+          if (conversations[from]) {
+            conversations[from].requiresAdvisor = true;
+          }
+
+        } else {
+          // Si dice "no, gracias", termina el flujo
           await sendTextMessage(
             from,
             "✅ ¡Gracias por su solicitud!\n\nNos pondremos en contacto en el menor tiempo posible."
           );
 
           delete userData[from]; // Limpiar datos
-
-        } catch (err) {
-          console.error("🚨 Error al guardar en Sheets:", err.message);
-          await sendTextMessage(
-            from,
-            "⚠️ Hubo un error guardando sus datos. Por favor, inténtelo más tarde."
-          );
         }
 
         break;
@@ -304,21 +333,23 @@ app.post('/webhook', async (req, res) => {
   res.sendStatus(200);
 });
 
-// Ruta /monitor - Muestra el historial de conversaciones
+// Ruta /monitor - Muestra el historial de conversaciones y permite responder
 app.get('/monitor', (req, res) => {
   let html = `
     <html>
       <head>
-        <title>📲 Monitor de Chatbot</title>
+        <title>📲 Monitor de Conversaciones</title>
         <meta http-equiv="refresh" content="10">
         <style>
-          body { font-family: Arial; background: #f9f9f9; padding: 20px; }
-          .chat { background: white; border-radius: 8px; padding: 15px; margin-bottom: 20px; box-shadow: 0 1px 4px rgba(0,0,0,0.1); }
-          .from, .to { display: block; margin: 5px 0; }
-          .cliente { color: black; font-weight: bold; }
-          .bot { color: green; font-weight: bold; }
-          small { color: gray; font-size: 0.8em; }
-          h2 { color: #25D366; }
+          body { font-family: Arial; background: #000; color: white; padding: 20px; }
+          .chat-container { display: flex; flex-direction: column; max-width: 600px; margin-bottom: 30px; }
+          .chat-header { font-weight: bold; margin-top: 20px; }
+          .bubble-client { background: #373A3C; color: white; border-radius: 10px; padding: 10px; width: auto; max-width: 80%; margin: 5px 0; float: left; clear: both; }
+          .bubble-bot { background: #25D366; color: white; border-radius: 10px; padding: 10px; max-width: 80%; margin: 5px 0; float: right; clear: both; }
+          .timestamp { font-size: 0.7em; color: gray; margin-left: 10px; }
+          .input-area { margin-top: 10px; display: flex; gap: 10px; }
+          input[type=text], textarea { padding: 10px; width: 100%; max-width: 400px; }
+          button { padding: 10px 15px; background: #25D366; color: white; border: none; border-radius: 5px; cursor: pointer; }
         </style>
       </head>
       <body>
@@ -326,24 +357,88 @@ app.get('/monitor', (req, res) => {
   `;
 
   for (const from in conversations) {
-    html += `<div class="chat"><strong>Cliente:</strong> ${from}<br>`;
-    conversations[from].responses.forEach(msg => {
+    const chat = conversations[from];
+
+    html += `
+      <div class="chat-container">
+        <div class="chat-header">Cliente: ${from}</div>
+    `;
+
+    chat.responses.forEach(msg => {
       const time = msg.timestamp.toLocaleTimeString();
 
       if (msg.from === 'cliente') {
-        html += `<span class="cliente">👤 Cliente:</span> <small>${time}</small><br>${msg.text}<br><br>`;
+        html += `
+          <div style="clear:both;">
+            <div class="bubble-client">${msg.text}</div>
+            <small class="timestamp">${time}</small>
+          </div>
+        `;
       } else {
-        html += `<span class="bot">🤖 Bot:</span> <small>${time}</small><br>${msg.text}<br><br>`;
+        html += `
+          <div style="clear:both;">
+            <div class="bubble-bot">${msg.text}</div>
+            <small class="timestamp">${time}</small>
+          </div>
+        `;
       }
     });
-    html += `<hr></div>`;
+
+    // Campo para responder manualmente
+    html += `
+        <form class="input-area" action="/api/send" method="POST">
+          <input type="hidden" name="to" value="${from}">
+          <input type="text" name="message" placeholder="Escribe tu mensaje...">
+          <button type="submit">Enviar</button>
+        </form>
+      </div>
+    `;
   }
 
   html += '</body></html>';
   res.send(html);
 });
 
-// Puerto dinámico para Render
+// Carpeta pública para archivos estáticos
+app.use(express.static('public'));
+
+// Ruta para enviar mensajes manuales
+app.post('/api/send', async (req, res) => {
+  const { to, message } = req.body;
+
+  if (!to || !message) return res.send("Faltan datos");
+
+  try {
+    await axios.post(
+      `https://graph.facebook.com/v22.0/${process.env.PHONE_NUMBER_ID}/messages`, 
+      {
+        messaging_product: "whatsapp",
+        to,
+        text: { body: message },
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
+        },
+      }
+    );
+
+    // Guardar mensaje del asesor
+    if (!conversations[to]) conversations[to] = { responses: [] };
+    conversations[to].responses.push({
+      from: 'bot',
+      text: message,
+      timestamp: new.Date()
+    });
+
+    res.redirect('/monitor');
+  } catch (err) {
+    console.error("🚨 Error al enviar mensaje:", err.message);
+    res.send("Hubo un error");
+  }
+});
+
+// Puerto dinámico
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀 Servidor corriendo en puerto ${PORT}`);
