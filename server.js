@@ -78,11 +78,11 @@ async function sendTextMessage(to, text) {
 
   // Registrar mensaje del bot
   if (!conversations[to]) conversations[to] = { responses: [] };
-  conversations[to].responses.push({
-    from: 'bot',
-    text: text,
-    timestamp: new Date()
-  });
+  conversations[from].responses.push({
+  from: 'bot',
+  text: text,
+  timestamp: new Date()
+});
 }
 
 // Ruta para enviar mensajes desde el asesor
@@ -108,10 +108,10 @@ app.post('/send', async (req, res) => {
 
     // Guardar la respuesta del asesor
     conversations[to].responses.push({
-      from: 'bot',
-      text: message,
-      timestamp: new Date()
-    });
+  from: 'bot',
+  text: message,
+  timestamp: new Date()
+});
 
     res.send({ status: "ok" });
   } catch (err) {
