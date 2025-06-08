@@ -5,8 +5,8 @@ const axios = require('axios');
 
 const app = express();
 app.use(bodyParser.json());
-app.use(bodyParser.urlencoded({ extended: true })); // 👈 Agrega esto
-app.use(express.static('public'));
+app.use(bodyParser.urlencoded({ extended: true })); // 👈 Importante para formularios HTML
+app.use(express.static('public')); // Carpeta donde estarán tus archivos HTML/CSS/JS
 
 // Estados del bot
 const STATE = {
@@ -20,7 +20,7 @@ const STATE = {
   CONTACT: 'contact'
 };
 
-// Opciones válidas
+// Mapeos de respuestas
 const PROPERTY_TYPES_MAP = {
   '1': 'casa',
   '2': 'departamento',
@@ -77,8 +77,10 @@ async function sendTextMessage(to, text) {
     }
   );
 
-  // Registrar mensaje del bot
-  if (!conversations[to]) conversations[to] = { responses: [] };
+  if (!conversations[to]) {
+    conversations[to] = { responses: [] };
+  }
+
   conversations[to].responses.push({
     from: 'bot',
     text: text,
@@ -86,59 +88,7 @@ async function sendTextMessage(to, text) {
   });
 }
 
-// Ruta para enviar mensajes desde el asesor
-app.post('/api/send', async (req, res) => {
-  const to = req.body.to;
-  const message = req.body.message;
-
-  if (!to || !message) {
-    return res.status(400).send("Faltan datos");
-  }
-
-  try {
-    await axios.post(
-      `https://graph.facebook.com/v22.0/${process.env.PHONE_NUMBER_ID}/messages`, 
-      {
-        messaging_product: "whatsapp",
-        to,
-        text: { body: message },
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`
-        }
-      }
-    );
-
-    // Guardar la respuesta del asesor
-    if (!conversations[to]) conversations[to] = { responses: [] };
-    conversations[to].responses.push({
-      from: 'bot',
-      text: message,
-      timestamp: new Date()
-    });
-
-    res.redirect('/monitor');
-  } catch (err) {
-    console.error("🚨 Error al enviar mensaje:", err.message);
-    res.send("Hubo un error");
-  }
-});
-
-// Webhook de verificación
-app.get('/webhook', (req, res) => {
-  const mode = req.query['hub.mode'];
-  const token = req.query['hub.verify_token'];
-  const challenge = req.query['hub.challenge'];
-
-  if (mode && token && mode === 'subscribe' && token === process.env.VERIFY_TOKEN) {
-    res.status(200).send(challenge);
-  } else {
-    res.sendStatus(403);
-  }
-});
-
-// Webhook para recibir mensajes
+// Ruta /webhook - Recibir mensajes de WhatsApp
 app.post('/webhook', async (req, res) => {
   const body = req.body;
 
@@ -326,75 +276,4 @@ app.post('/webhook', async (req, res) => {
   }
 
   res.sendStatus(200);
-});
-
-// Ruta /monitor - Muestra el historial de conversaciones y permite responder
-app.get('/monitor', (req, res) => {
-  let html = `
-    <html>
-      <head>
-        <title>📲 Monitor de Conversaciones</title>
-        <meta http-equiv="refresh" content="10">
-        <style>
-          body { font-family: Arial; background: #000; color: white; padding: 20px; }
-          .chat-container { display: flex; flex-direction: column; max-width: 600px; margin-bottom: 30px; }
-          .chat-header { font-weight: bold; margin-top: 20px; }
-          .bubble-client { background: #373A3C; color: white; border-radius: 10px; padding: 10px; width: auto; max-width: 80%; margin: 5px 0; float: left; clear: both; }
-          .bubble-bot { background: #25D366; color: white; border-radius: 10px; padding: 10px; max-width: 80%; margin: 5px 0; float: right; clear: both; }
-          .timestamp { font-size: 0.7em; color: gray; }
-          .input-area { margin-top: 10px; display: flex; gap: 10px; }
-          input[type=text], textarea { padding: 10px; width: 100%; max-width: 400px; }
-          button { padding: 10px 15px; background: #25D366; color: white; border: none; border-radius: 5px; cursor: pointer; }
-        </style>
-      </head>
-      <body>
-        <h2>Monitor de Conversaciones</h2>
-  `;
-
-  for (const from in conversations) {
-    const chat = conversations[from];
-
-    html += `
-      <div class="chat-container">
-        <strong>${from}</strong><br>
-    `;
-
-    chat.responses.forEach(msg => {
-      const time = msg.timestamp.toLocaleTimeString();
-
-      if (msg.from === 'cliente') {
-        html += `
-          <div style="clear:both;">
-            <div class="bubble-client">${msg.text}</div>
-            <small class="timestamp">${time}</small><br>
-          </div>
-        `;
-      } else {
-        html += `
-          <div style="clear:both;">
-            <div class="bubble-bot">${msg.text}</div>
-            <small class="timestamp">${time}</small><br>
-          </div>
-        `;
-      }
-    });
-
-    html += `
-        <form class="input-area" action="/api/send" method="POST">
-          <input type="hidden" name="to" value="${from}">
-          <input type="text" name="message" placeholder="Escribe tu mensaje...">
-          <button type="submit">Enviar</button>
-        </form>
-      </div>
-    `;
-  }
-
-  html += '</body></html>';
-  res.send(html);
-});
-
-// Puerto dinámico
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`🚀 Servidor corriendo en puerto ${PORT}`);
 });
