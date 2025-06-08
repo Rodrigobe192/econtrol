@@ -5,6 +5,7 @@ const axios = require('axios');
 
 const app = express();
 app.use(bodyParser.json());
+app.use(bodyParser.urlencoded({ extended: true })); // 👈 Agrega esto
 app.use(express.static('public'));
 
 // Estados del bot
@@ -81,9 +82,48 @@ async function sendTextMessage(to, text) {
   conversations[to].responses.push({
     from: 'bot',
     text: text,
-    timestamp: new Date() // ✅ Corregido
+    timestamp: new Date()
   });
 }
+
+// Ruta para enviar mensajes desde el asesor
+app.post('/api/send', async (req, res) => {
+  const to = req.body.to;
+  const message = req.body.message;
+
+  if (!to || !message) {
+    return res.status(400).send("Faltan datos");
+  }
+
+  try {
+    await axios.post(
+      `https://graph.facebook.com/v22.0/${process.env.PHONE_NUMBER_ID}/messages`, 
+      {
+        messaging_product: "whatsapp",
+        to,
+        text: { body: message },
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`
+        }
+      }
+    );
+
+    // Guardar la respuesta del asesor
+    if (!conversations[to]) conversations[to] = { responses: [] };
+    conversations[to].responses.push({
+      from: 'bot',
+      text: message,
+      timestamp: new Date()
+    });
+
+    res.redirect('/monitor');
+  } catch (err) {
+    console.error("🚨 Error al enviar mensaje:", err.message);
+    res.send("Hubo un error");
+  }
+});
 
 // Webhook de verificación
 app.get('/webhook', (req, res) => {
@@ -138,7 +178,7 @@ app.post('/webhook', async (req, res) => {
     conversations[from].responses.push({
       from: 'cliente',
       text: text,
-      timestamp: new Date() // ✅ Corregido
+      timestamp: new Date()
     });
   }
 
@@ -264,7 +304,7 @@ app.post('/webhook', async (req, res) => {
         if (contactMatch === 'sí, por favor') {
           await sendTextMessage(
             from,
-            "✅ Un asesor se pondrá en contacto contigo ahora mismo."
+            "✅ Perfecto, un asesor se pondrá en contacto contigo ahora mismo."
           );
 
           // Cambiar estado para detener flujo automático
@@ -299,7 +339,7 @@ app.get('/monitor', (req, res) => {
           body { font-family: Arial; background: #000; color: white; padding: 20px; }
           .chat-container { display: flex; flex-direction: column; max-width: 600px; margin-bottom: 30px; }
           .chat-header { font-weight: bold; margin-top: 20px; }
-          .bubble-client { background: #373A3C; color: white; border-radius: 10px; padding: 10px; max-width: 80%; margin: 5px 0; float: left; clear: both; }
+          .bubble-client { background: #373A3C; color: white; border-radius: 10px; padding: 10px; width: auto; max-width: 80%; margin: 5px 0; float: left; clear: both; }
           .bubble-bot { background: #25D366; color: white; border-radius: 10px; padding: 10px; max-width: 80%; margin: 5px 0; float: right; clear: both; }
           .timestamp { font-size: 0.7em; color: gray; }
           .input-area { margin-top: 10px; display: flex; gap: 10px; }
@@ -340,7 +380,7 @@ app.get('/monitor', (req, res) => {
     });
 
     html += `
-        <form class="input-area" action="/send" method="POST">
+        <form class="input-area" action="/api/send" method="POST">
           <input type="hidden" name="to" value="${from}">
           <input type="text" name="message" placeholder="Escribe tu mensaje...">
           <button type="submit">Enviar</button>
@@ -351,43 +391,6 @@ app.get('/monitor', (req, res) => {
 
   html += '</body></html>';
   res.send(html);
-});
-
-// Ruta para enviar mensajes manuales
-app.post('/send', async (req, res) => {
-  const { to, message } = req.body;
-
-  if (!to || !message) return res.status(400).send("Faltan datos");
-
-  try {
-    await axios.post(
-      `https://graph.facebook.com/v22.0/${process.env.PHONE_NUMBER_ID}/messages`, 
-      {
-        messaging_product: "whatsapp",
-        to,
-        text: { body: message },
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`
-        }
-      }
-    );
-
-    // Guardar mensaje del asesor
-    if (!conversations[to]) conversations[to] = { responses: [] };
-    conversations[to].responses.push({
-      from: 'bot',
-      text: message,
-      timestamp: new Date() // ✅ Corregido
-    });
-
-    res.redirect('/monitor');
-
-  } catch (err) {
-    console.error("🚨 Error al enviar mensaje:", err.message);
-    res.send("Hubo un error");
-  }
 });
 
 // Puerto dinámico
