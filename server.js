@@ -5,7 +5,7 @@ const axios = require('axios');
 
 const app = express();
 app.use(bodyParser.json());
-app.use(bodyParser.urlencoded({ extended: true })); // 👈 Importante para formularios HTML
+app.use(bodyParser.urlencoded({ extended: true }));
 app.use(express.static('public')); // Carpeta donde estarán tus archivos HTML/CSS/JS
 
 // Estados del bot
@@ -77,10 +77,8 @@ async function sendTextMessage(to, text) {
     }
   );
 
-  if (!conversations[to]) {
-    conversations[to] = { responses: [] };
-  }
-
+  // Registrar mensaje del bot
+  if (!conversations[to]) conversations[to] = { responses: [] };
   conversations[to].responses.push({
     from: 'bot',
     text: text,
@@ -254,10 +252,11 @@ app.post('/webhook', async (req, res) => {
         if (contactMatch === 'sí, por favor') {
           await sendTextMessage(
             from,
-            "✅ Perfecto, un asesor se pondrá en contacto contigo ahora mismo."
+            "✅ Un asesor se pondrá en contacto contigo ahora mismo."
           );
 
-          // Cambiar estado para detener flujo automático
+          // Marcar como pendiente de asesor
+          conversations[from].requiresAdvisor = true;
           user.state = 'manual';
         } else {
           await sendTextMessage(
@@ -276,4 +275,90 @@ app.post('/webhook', async (req, res) => {
   }
 
   res.sendStatus(200);
+});
+
+// Enviar datos a Google Sheets
+app.post('/api/sheet', async (req, res) => {
+  const data = req.body;
+
+  try {
+    await axios.post(process.env.APPS_SCRIPT_URL, data);
+    res.send({ status: "ok" });
+  } catch (err) {
+    console.error("🚨 Error al guardar en Sheets:", err.message);
+    res.send({ status: "error", error: err.message });
+  }
+});
+
+// Ruta para obtener todos los chats
+app.get('/api/chats', (req, res) => {
+  res.send(conversations);
+});
+
+// Ruta para obtener un chat específico
+app.get('/api/chat/:from', (req, res) => {
+  const from = req.params.from;
+  res.send(conversations[from] || { responses: [] });
+});
+
+// Ruta para enviar mensajes desde el asesor
+app.post('/api/send', async (req, res) => {
+  const { to, message } = req.body;
+
+  if (!to || !message) {
+    return res.status(400).send("Faltan datos");
+  }
+
+  try {
+    await axios.post(
+      `https://graph.facebook.com/v22.0/${process.env.PHONE_NUMBER_ID}/messages`, 
+      {
+        messaging_product: "whatsapp",
+        to,
+        text: { body: message },
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`
+        }
+      }
+    );
+
+    // Registrar mensaje del asesor
+    if (!conversations[to]) conversations[to] = { responses: [] };
+    conversations[to].responses.push({
+      from: 'bot',
+      text: message,
+      timestamp: new Date()
+    });
+
+    res.send({ status: "ok" });
+  } catch (err) {
+    console.error("🚨 Error al enviar mensaje:", err.message);
+    res.send({ status: "error", error: err.message });
+  }
+});
+
+// Webhook de verificación
+app.get('/webhook', (req, res) => {
+  const mode = req.query['hub.mode'];
+  const token = req.query['hub.verify_token'];
+  const challenge = req.query['hub.challenge'];
+
+  if (mode && token && mode === 'subscribe' && token === process.env.VERIFY_TOKEN) {
+    res.status(200).send(challenge);
+  } else {
+    res.sendStatus(403);
+  }
+});
+
+// Página principal del monitor
+app.get('/', (req, res) => {
+  res.sendFile(__dirname + '/public/index.html');
+});
+
+// Puerto dinámico
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`🚀 Servidor corriendo en puerto ${PORT}`);
 });
